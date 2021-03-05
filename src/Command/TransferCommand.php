@@ -1,6 +1,6 @@
 <?php
 
-declare (strict_types=1);
+declare(strict_types=1);
 
 namespace Remind\BucketTransfer\Command;
 
@@ -139,19 +139,19 @@ class TransferCommand extends Command
         if ($this->localPath === '') {
             $output->writeln('<error>Local path argument not set</error>');
             return self::EXIT_ERROR;
-        } else if ($this->remotePath === '') {
+        } elseif ($this->remotePath === '') {
             $output->writeln('<error>Remote path argument not set</error>');
             return self::EXIT_ERROR;
-        } else if ($key === '') {
+        } elseif ($key === '') {
             $output->writeln('<error>S3_KEY environment variable not set</error>');
             return self::EXIT_ERROR;
-        } else if ($token === '') {
+        } elseif ($token === '') {
             $output->writeln('<error>S3_TOKEN environment variable not set</error>');
             return self::EXIT_ERROR;
-        } else if ($this->bucket === '') {
+        } elseif ($this->bucket === '') {
             $output->writeln('<error>S3_BUCKET environment variable not set</error>');
             return self::EXIT_ERROR;
-        } else if ($region === '') {
+        } elseif ($region === '') {
             $output->writeln('<error>S3_REGION environment variable not set</error>');
             return self::EXIT_ERROR;
         }
@@ -248,7 +248,6 @@ class TransferCommand extends Command
 
                 /* Put object, ignore result */
                 $this->client->putObject($options);
-
             } catch (S3Exception $e) {
                 /* Print error */
                 $this->output->writeln('<error>' . $e->getMessage() . '</error>');
