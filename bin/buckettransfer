@@ -1,0 +1,30 @@
+#!/usr/bin/env php
+<?php
+
+declare (strict_types=1);
+
+$paths = [
+    __DIR__ . '/../vendor/autoload.php', // locally
+    __DIR__ . '/../../../autoload.php'   // dependency
+];
+
+foreach ($paths as $path) {
+
+    if (file_exists($path)) {
+
+        require_once $path;
+        break;
+    }
+}
+
+use Remind\BucketTransfer\Command\TransferCommand;
+use Symfony\Component\Console\Application;
+use Symfony\Component\Dotenv\Dotenv;
+
+/* Load config from dotenv files */
+$dotenv = new Dotenv();
+$dotenv->loadEnv(dirname(__DIR__, 1) . DIRECTORY_SEPARATOR . '.env');
+
+$application = new Application();
+$application->add(new TransferCommand());
+$application->run();
