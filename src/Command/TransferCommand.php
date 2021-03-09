@@ -307,6 +307,11 @@ class TransferCommand extends Command
             /* Generated path for key field in putObject */
             $awsKey = $this->remotePath . $relativeSanitized . $file->getFilename();
 
+            /* Append final slash for directories */
+            if ($file->isDir()) {
+                $awsKey .= '/';
+            }
+
             /* Generate bucket path (key) */
             $remotePathInfo = $this->bucket . '/' . $awsKey;
 
