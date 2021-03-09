@@ -6,6 +6,7 @@ namespace Remind\BucketTransfer\Command;
 
 use Aws\S3\Exception\S3Exception;
 use Aws\S3\S3Client;
+use InvalidArgumentException;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputDefinition;
 use Symfony\Component\Console\Input\InputInterface;
@@ -16,8 +17,6 @@ use Symfony\Component\Finder\Finder;
 
 /**
  * The actual implementation
- *
- * @todo Implement command argument to exclude folders or files
  */
 class TransferCommand extends Command
 {
@@ -31,13 +30,25 @@ class TransferCommand extends Command
      * Name of the local path parameter.
      * @var string
      */
-    protected const ARGUMENT_LOCAL_PATH = 'local-path';
+    protected const OPTION_LOCAL_PATH = 'local-path';
 
     /**
      * Name of the remote path parameter.
      * @var string
      */
-    protected const ARGUMENT_REMOTE_PATH = 'remote-path';
+    protected const OPTION_REMOTE_PATH = 'remote-path';
+
+    /**
+     * Name of the parameter to exclude directories by name.
+     * @var string
+     */
+    protected const OPTION_EXCLUDE = 'exclude-dir';
+
+    /**
+     * Name of the dry run parameter.
+     * @var string
+     */
+    protected const OPTION_DRY_RUN = 'dry-run';
 
     /**
      * Return value for success.
@@ -72,11 +83,31 @@ class TransferCommand extends Command
     protected string $remotePath = '';
 
     /**
+     *
+     * @var bool
+     */
+    protected bool $isDryRun = false;
+
+    /**
+     * Array of strings that each will be excluded by the symfony finder.
+     *
+     * @var array
+     */
+    protected array $excludes = [];
+
+    /**
      * The bucket name.
      *
      * @var string
      */
     protected string $bucket = '';
+
+    /**
+     * The symfony console input.
+     *
+     * @var InputInterface|null
+     */
+    protected ?InputInterface $input = null;
 
     /**
      * The symfony console output.
@@ -99,17 +130,31 @@ class TransferCommand extends Command
         $this->setDefinition(
             new InputDefinition([
                 new InputOption(
-                    self::ARGUMENT_LOCAL_PATH,
+                    self::OPTION_LOCAL_PATH,
                     null,
                     InputOption::VALUE_REQUIRED,
                     'The path to the local folder',
                     null
                 ),
                 new InputOption(
-                    self::ARGUMENT_REMOTE_PATH,
+                    self::OPTION_REMOTE_PATH,
                     null,
                     InputOption::VALUE_REQUIRED,
                     'Path inside the bucket',
+                    null
+                ),
+                new InputOption(
+                    self::OPTION_DRY_RUN,
+                    null,
+                    InputOption::VALUE_NONE,
+                    'Simulate the process without actual upload',
+                    null
+                ),
+                new InputOption(
+                    self::OPTION_EXCLUDE,
+                    null,
+                    InputOption::VALUE_OPTIONAL | InputOption::VALUE_IS_ARRAY,
+                    'Exclude directories',
                     null
                 )
             ])
@@ -125,34 +170,14 @@ class TransferCommand extends Command
      */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        /* Parse data from passed arguments */
-        $this->localPath = $input->getOption(self::ARGUMENT_LOCAL_PATH) ?? '';
-        $this->remotePath = $input->getOption(self::ARGUMENT_REMOTE_PATH) ?? '';
+        $this->input = $input;
+        $this->output = $output;
 
-        /* Directly from the $_ENV superglobal. filter_input() did not work */
-        $key = $_ENV['S3_KEY'] ?? '';
-        $token = $_ENV['S3_TOKEN'] ?? '';
-        $this->bucket = $_ENV['S3_BUCKET'] ?? '';
-        $region = $_ENV['S3_REGION'] ?? '';
-
-        /* Argument error checking */
-        if ($this->localPath === '') {
-            $output->writeln('<error>Local path argument not set</error>');
-            return self::EXIT_ERROR;
-        } elseif ($this->remotePath === '') {
-            $output->writeln('<error>Remote path argument not set</error>');
-            return self::EXIT_ERROR;
-        } elseif ($key === '') {
-            $output->writeln('<error>S3_KEY environment variable not set</error>');
-            return self::EXIT_ERROR;
-        } elseif ($token === '') {
-            $output->writeln('<error>S3_TOKEN environment variable not set</error>');
-            return self::EXIT_ERROR;
-        } elseif ($this->bucket === '') {
-            $output->writeln('<error>S3_BUCKET environment variable not set</error>');
-            return self::EXIT_ERROR;
-        } elseif ($region === '') {
-            $output->writeln('<error>S3_REGION environment variable not set</error>');
+        try {
+            $this->processOptions();
+            $this->prepareClient();
+        } catch (InvalidArgumentException $e) {
+            $output->writeln('<error>' . $e->getMessage() . '</error>');
             return self::EXIT_ERROR;
         }
 
@@ -161,7 +186,57 @@ class TransferCommand extends Command
             $this->remotePath .= '/';
         }
 
-        $this->output = $output;
+        return $this->transfer();
+    }
+
+    /**
+     * Processes the given input options into the class members and performs
+     * a validation on the values.
+     * Will exit the process on error.
+     *
+     * @return void
+     */
+    protected function processOptions(): void
+    {
+        /* Parse data from passed arguments */
+        $this->localPath = $this->input->getOption(self::OPTION_LOCAL_PATH) ?? '';
+        $this->remotePath = $this->input->getOption(self::OPTION_REMOTE_PATH) ?? '';
+        $this->excludes = $this->input->getOption(self::OPTION_EXCLUDE);
+        $this->isDryRun = $this->input->getOption(self::OPTION_DRY_RUN);
+
+        $this->bucket = $_ENV['S3_BUCKET'] ?? '';
+
+        /* Argument error checking */
+        if ($this->localPath === '') {
+            throw new InvalidArgumentException('Local path argument not set');
+        } elseif ($this->remotePath === '') {
+            throw new InvalidArgumentException('Remote path argument not set');
+        } elseif ($this->bucket === '') {
+            throw new InvalidArgumentException('S3_BUCKET environment variable not set');
+        }
+    }
+
+    /**
+     * Create a new S3Client instance from the values given in the
+     * environment variables.
+     * Will exit the process on error.
+     *
+     * @return void
+     */
+    protected function prepareClient(): void
+    {
+        /* Directly from the $_ENV superglobal. filter_input() did not work */
+        $key = $_ENV['S3_KEY'] ?? '';
+        $token = $_ENV['S3_TOKEN'] ?? '';
+        $region = $_ENV['S3_REGION'] ?? '';
+
+        if ($key === '') {
+            throw new InvalidArgumentException('S3_KEY environment variable not set');
+        } elseif ($token === '') {
+            throw new InvalidArgumentException('S3_TOKEN environment variable not set');
+        } elseif ($region === '') {
+            throw new InvalidArgumentException('S3_REGION environment variable not set');
+        }
 
         /* Create a new client */
         $this->client = new S3Client([
@@ -172,20 +247,28 @@ class TransferCommand extends Command
                 'secret' => $token
             ]
         ]);
-
-        return $this->transfer();
     }
 
     /**
+     * Run the actual transfer.
      *
-     * @return bool
+     * @return bool True on success; false in case any error occured
      */
     protected function transfer(): int
     {
         /* New symfony finder */
         $finder = new Finder();
 
-        /* Get the real path of the given local path */
+        /* Apply excludes if given */
+        if (!empty($this->excludes)) {
+            $finder->exclude($this->excludes);
+        }
+
+        /*
+         * Get the real path of the given local path
+         * so the relative path can be created by cutting of this path string
+         * from the absolute path of the currently processed file
+         */
         $realPath = realpath($this->localPath);
 
         try {
@@ -229,6 +312,11 @@ class TransferCommand extends Command
 
             /* Print info for -v option */
             $this->output->writeln('Storing: ' . $remotePathInfo, OutputInterface::VERBOSITY_VERBOSE);
+
+            /* Skip actual upload and continue */
+            if ($this->isDryRun) {
+                continue;
+            }
 
             try {
 
